@@ -3,7 +3,7 @@
 This repository contains a PyTorch implementation of a Tyroid segmentation deep learning model. The steps for training and testing the model are outlined below.
 
 ## Directory Structure
-
+용량문제로 서버에만 데이터 올려두겠습니다.
 Below is the directory structure of the project:
 ```bash
 ├── data
