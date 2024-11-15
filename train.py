@@ -18,7 +18,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_direc', type=str, default='./data', help="Data directory")
     parser.add_argument('--n_classes', type=int, default=1, help="Number of classes")
     parser.add_argument('--batchSize', type=int, default=2, help='Training batch size')
-    parser.add_argument('--total_epoch', type=int, default=20, help='Number of epochs to train for')
+    parser.add_argument('--total_epoch', type=int, default=200, help='Number of epochs to train for')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--lr_schedule_patience', type=int, default=10, help='Learning rate schedule patience')
     parser.add_argument('--earlystop_patience', type=int, default=20, help='Early stopping patience')
