@@ -47,7 +47,7 @@ class CustomDataset(Dataset):
         image = (image - np.min(image)) / (np.max(image) - np.min(image))
 
         # Ensure the mask is binary
-        mask_slice = (mask > 127).astype(np.float32) 
+        mask = (mask > 127).astype(np.float32) 
 
         # Resize the image and mask to the desired output shape
         image_tensor = torch.nn.functional.interpolate(
