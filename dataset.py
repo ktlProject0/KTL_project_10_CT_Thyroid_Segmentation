@@ -1,98 +1,117 @@
 import os
 import glob
-import copy
-from natsort import natsorted
 import numpy as np
-import pandas as pd
 import SimpleITK as sitk
 import torch
 from torch.utils.data import Dataset
 
+
 class CustomDataset(Dataset):
-    def __init__(self, direc, mode='eval', window_center=40, window_width=400, output_shape=(256, 256)):
+    def __init__(self, direc, mode='eval', output_shape=(128, 128, 128)):
+        """
+        Custom dataset for loading NIfTI image and mask pairs and resizing to the specified output shape.
+        """
         self.mode = mode
-        self.window_center = window_center
-        self.window_width = window_width
         self.output_shape = output_shape
+        
+        # Get image and mask file paths
+        self.image_paths = sorted(glob.glob(os.path.join(direc, 'images', '*.nii.gz')) + 
+                                  glob.glob(os.path.join(direc, 'images', '*.nii')))
+        self.mask_paths = sorted(glob.glob(os.path.join(direc, 'masks', '*.nii.gz')) + 
+                                 glob.glob(os.path.join(direc, 'masks', '*.nii')))
 
-        # Load file paths
-        img_path = natsorted(glob.glob(os.path.join(direc, 'images', '*')))
-        mask_path = natsorted(glob.glob(os.path.join(direc, 'masks', '*')))
-        self.meta_df = pd.DataFrame({"image": img_path, 'label': mask_path})
+        if not self.image_paths or not self.mask_paths:
+            raise FileNotFoundError(f"No NIfTI files found in directory: {direc}/images or {direc}/masks")
 
-        # Create slice information
-        self.slice_info = []
-        for idx, row in self.meta_df.iterrows():
-            image = sitk.GetArrayFromImage(sitk.ReadImage(row['image']))
-            depth = image.shape[0]  # Number of slices
-            for slice_idx in range(depth):
-                self.slice_info.append((idx, slice_idx))
+        if len(self.image_paths) != len(self.mask_paths):
+            raise ValueError("Number of images and masks do not match.")
 
     def __len__(self):
-        return len(self.slice_info)
-
-    def apply_window(self, image):
-        min_value = self.window_center - self.window_width / 2
-        max_value = self.window_center + self.window_width / 2
-        image = np.clip(image, min_value, max_value)
-        image = ((image - min_value) / (max_value - min_value)) * 255
-        return image.astype(np.uint8)
+        """
+        Return the number of NIfTI files in the directory.
+        """
+        return len(self.image_paths)
 
     def __getitem__(self, idx):
-        # Get the file and slice indices
-        file_idx, slice_idx = self.slice_info[idx]
-        sample = self.meta_df.iloc[file_idx, :].to_dict()
+        """
+        Load and preprocess a single NIfTI image and mask pair at the given index.
+        """
+        # Load image and mask
+        image_path = self.image_paths[idx]
+        mask_path = self.mask_paths[idx]
 
-        # Load 3D image and mask
-        image = sitk.GetArrayFromImage(sitk.ReadImage(sample['image']))
-        mask = sitk.GetArrayFromImage(sitk.ReadImage(sample['label']))
+        image = sitk.GetArrayFromImage(sitk.ReadImage(image_path))
+        mask = sitk.GetArrayFromImage(sitk.ReadImage(mask_path))
 
-        # Extract the 2D slice
-        image_slice = image[slice_idx, :, :]
-        mask_slice = mask[slice_idx, :, :]
+        # Normalize the image to [0, 1]
+        image = (image - np.min(image)) / (np.max(image) - np.min(image))
 
-        # Apply windowing and normalization to the image
-        image_slice = self.apply_window(image_slice) / 255.0
-        image_slice = (image_slice - 0.5) / 0.5  # Normalize to [-1, 1]
+        # Ensure the mask is binary
+        mask_slice = (mask > 127).astype(np.float32) 
 
-        # Ensure mask is binary
-        mask_slice = np.clip(mask_slice, 0, 1).astype(np.float32)
-
-        # Resize image and mask
+        # Resize the image and mask to the desired output shape
         image_tensor = torch.nn.functional.interpolate(
-            torch.tensor(image_slice, dtype=torch.float32).unsqueeze(0).unsqueeze(0),
+            torch.tensor(image, dtype=torch.float32).unsqueeze(0).unsqueeze(0),  # Add batch and channel dimensions
             size=self.output_shape,
-            mode='bilinear',
+            mode='trilinear',
             align_corners=False
-        ).squeeze(0)
+        ).squeeze(0)  # Remove the added dimensions
+
         mask_tensor = torch.nn.functional.interpolate(
-            torch.tensor(mask_slice, dtype=torch.float32).unsqueeze(0).unsqueeze(0),
+            torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             size=self.output_shape,
             mode='nearest'
         ).squeeze(0)
 
-        sample = {'image': image_tensor, 'mask': mask_tensor}
-
-        # Apply augmentation for training mode
+        # Apply augmentation if in training mode
         if self.mode == 'train':
-            sample = self._augment_sample(sample)
+            image_tensor, mask_tensor = self._augment_data(image_tensor, mask_tensor)
 
-        return {'input': sample['image'], 'target': sample['mask']}
+        return {'input': image_tensor, 'target': mask_tensor}
 
-    def _augment_sample(self, sample):
-        image, mask = sample['image'], sample['mask']
-        if torch.rand(1).item() > 0.5:
-            image = image.flip(dims=(1,))
-            mask = mask.flip(dims=(1,))
-        if torch.rand(1).item() > 0.5:
-            image = image.flip(dims=(2,))
-            mask = mask.flip(dims=(2,))
-        return {'image': image, 'mask': mask}
+    def _augment_data(self, image_tensor, mask_tensor):
+        """
+        Apply augmentations to image and mask tensors.
+        """
+        # Convert tensors to numpy arrays
+        image_np = image_tensor.numpy()
+        mask_np = mask_tensor.numpy()
+
+        # Random flip along axes
+        if np.random.rand() > 0.5:  # Flip along depth
+            image_np = np.flip(image_np, axis=0).copy()
+            mask_np = np.flip(mask_np, axis=0).copy()
+        if np.random.rand() > 0.5:  # Flip along height
+            image_np = np.flip(image_np, axis=1).copy()
+            mask_np = np.flip(mask_np, axis=1).copy()
+        if np.random.rand() > 0.5:  # Flip along width
+            image_np = np.flip(image_np, axis=2).copy()
+            mask_np = np.flip(mask_np, axis=2).copy()
+
+        # Random rotation (90-degree steps)
+        if np.random.rand() > 0.5:
+            k = np.random.choice([1, 2, 3])  # Random number of 90-degree rotations
+            image_np = np.rot90(image_np, k, axes=(1, 2)).copy()
+            mask_np = np.rot90(mask_np, k, axes=(1, 2)).copy()
+
+        # Add Gaussian noise to the image
+        if np.random.rand() > 0.5:
+            noise = np.random.normal(0, 0.01, image_np.shape)
+            image_np = image_np + noise
+            image_np = np.clip(image_np, 0, 1)  # Ensure the range is still [0, 1]
+
+        # Convert back to tensors
+        return torch.tensor(image_np, dtype=torch.float32), torch.tensor(mask_np, dtype=torch.float32)
 
 
 if __name__ == '__main__':
-    train_dataset = CustomDataset(direc='./data/train', mode='train', output_shape=(256, 256))
-    test_dataset = CustomDataset(direc='./data/test', mode='eval', output_shape=(256, 256))
-    
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Test dataset size: {len(test_dataset)}")
+    # Define directories for training and testing datasets
+    train_dir = './data/train'  # Root directory containing 'images/' and 'masks/'
+    test_dir = './data/test'    # Root directory containing 'images/' and 'masks/'
+
+    # Create train and test datasets
+    train_dataset = CustomDataset(direc=train_dir, mode='train', output_shape=(256, 256, 256))
+    test_dataset = CustomDataset(direc=test_dir, mode='eval', output_shape=(256, 256, 256))
+
+    print(f"[INFO] Number of training samples: {len(train_dataset)}")
+    print(f"[INFO] Number of testing samples: {len(test_dataset)}")
