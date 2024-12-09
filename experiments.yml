@@ -1,4 +1,4 @@
-name: 10_thyroid_segmentation
+name: KTL_project_10_CT_Thyroid_Segmentation
 channels:
   - pytorch
   - nvidia
@@ -214,4 +214,4 @@ dependencies:
   - pip:
       - albumentations==1.0.0
       - simpleitk==2.4.0
-prefix: /home/pwrai/userarea/anaconda_envs/envs/10_thyroid_segmentation
+prefix: /home/pwrai/userarea/anaconda_envs/envs/KTL_project_10_CT_Thyroid_Segmentation
